@@ -10,25 +10,48 @@ class DistanceOverlay: ObservableObject {
     static let shared = DistanceOverlay()
     @Published var distanceString: String = "--"
     @Published var latestBBox: CGRect? = nil     // normalized bbox from Vision
-    @Published var objectName: String = ""   // ← new
+    @Published var objectName: String = ""       // object label
 }
 
-/// Manages speech synthesis for distance feedback
+/// Manages speech synthesis for object name and distance feedback
 class SpeechManager {
     private let synthesizer = AVSpeechSynthesizer()
-    private var lastSpokenMeter: Int?
-
-    func updateDistance(_ meters: Float) {
-        let rounded = Int(meters.rounded(.toNearestOrEven))
-        guard rounded != lastSpokenMeter else { return }
-        lastSpokenMeter = rounded
-
-        let text = "\(rounded) meter" + (rounded == 1 ? "" : "s")
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = 0.5
-        synthesizer.speak(utterance)
+    private var lastAnnouncement: String?
+    
+    // A DispatchWorkItem we can cancel if a new update comes in
+    private var pendingWorkItem: DispatchWorkItem?
+    
+    // Call this whenever you get a new (object, distance)
+    func scheduleSpeak(object: String, distanceMeters: Float) {
+        let rounded = Int(distanceMeters.rounded(.toNearestOrEven))
+        let metersText = "\(rounded) meter" + (rounded == 1 ? "" : "s")
+        let announcement = "\(object), \(metersText)"
+        
+        // If it’s identical to the last thing we actually spoke, bail out
+        guard announcement != lastAnnouncement else { return }
+        
+        // Cancel any speech already queued or in progress
+        pendingWorkItem?.cancel()
+        synthesizer.stopSpeaking(at: .immediate)
+        
+        // Create a new work item that will actually speak after 0.3 s
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.lastAnnouncement = announcement
+            
+            let utterance = AVSpeechUtterance(string: announcement)
+            utterance.rate = 0.5
+            // zero pre-utterance delay so it fires immediately
+            utterance.preUtteranceDelay = 0
+            self.synthesizer.speak(utterance)
+        }
+        pendingWorkItem = work
+        
+        // Schedule it on the main queue after 0.3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 }
+
 
 struct ARViewContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> ARView {
@@ -117,7 +140,7 @@ struct ARViewContainer: UIViewRepresentable {
                 return
             }
 
-            // Publish the label
+            // Publish label and bounding box
             let label = top.labels.first!.identifier
             DispatchQueue.main.async {
                 DistanceOverlay.shared.objectName = label
@@ -128,7 +151,7 @@ struct ARViewContainer: UIViewRepresentable {
             let cx = top.boundingBox.midX
             let cy = top.boundingBox.midY
 
-            // LiDAR depth if available
+            // Measure depth if available
             if let depthMap = frame.sceneDepth?.depthMap {
                 let w = CVPixelBufferGetWidth(depthMap)
                 let h = CVPixelBufferGetHeight(depthMap)
@@ -143,11 +166,11 @@ struct ARViewContainer: UIViewRepresentable {
                 let d = Double(ptr[px])
                 CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
 
+                let meters = Float(d)
                 DispatchQueue.main.async {
-                    let meters = Float(d)
                     DistanceOverlay.shared.distanceString = String(format: "%.2f m", d)
-                    self.speechManager.updateDistance(meters)
                 }
+                speechManager.scheduleSpeak(object: label, distanceMeters: meters)
 
             } else {
                 // Fallback: raycast
@@ -162,11 +185,11 @@ struct ARViewContainer: UIViewRepresentable {
                 ).first {
                     let t = hit.worldTransform.columns.3
                     let dist = sqrt(t.x*t.x + t.y*t.y + t.z*t.z)
+                    let meters = Float(dist)
                     DispatchQueue.main.async {
-                        let meters = Float(dist)
                         DistanceOverlay.shared.distanceString = String(format: "%.2f m", dist)
-                        self.speechManager.updateDistance(meters)
                     }
+                    speechManager.scheduleSpeak(object: label, distanceMeters: meters)
                 } else {
                     DispatchQueue.main.async {
                         DistanceOverlay.shared.distanceString = "--"
