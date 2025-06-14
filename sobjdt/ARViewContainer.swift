@@ -14,43 +14,48 @@ class DistanceOverlay: ObservableObject {
 }
 
 /// Manages speech synthesis for object name and distance feedback
+import SwiftUI            // for @AppStorage
+import AVFoundation
+
+/// Manages speech synthesis for object name and distance feedback
 class SpeechManager {
     private let synthesizer = AVSpeechSynthesizer()
     private var lastAnnouncement: String?
-    
-    // A DispatchWorkItem we can cancel if a new update comes in
     private var pendingWorkItem: DispatchWorkItem?
     
-    // Call this whenever you get a new (object, distance)
+    // ← now a Double, since @AppStorage doesn't support Float
+    @AppStorage("speechRate")
+    private var speechRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
+
+    /// Debounced “object, X meters” announcement
     func scheduleSpeak(object: String, distanceMeters: Float) {
-        let rounded = Int(distanceMeters.rounded(.toNearestOrEven))
-        let metersText = "\(rounded) meter" + (rounded == 1 ? "" : "s")
+        let rounded     = Int(distanceMeters.rounded(.toNearestOrEven))
+        let metersText  = "\(rounded) meter" + (rounded == 1 ? "" : "s")
         let announcement = "\(object), \(metersText)"
         
-        // If it’s identical to the last thing we actually spoke, bail out
+        // Don’t repeat the same phrase
         guard announcement != lastAnnouncement else { return }
         
-        // Cancel any speech already queued or in progress
+        // Cancel any queued or ongoing speech
         pendingWorkItem?.cancel()
         synthesizer.stopSpeaking(at: .immediate)
         
-        // Create a new work item that will actually speak after 0.3 s
+        // Debounce by 0.3s
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.lastAnnouncement = announcement
             
-            let utterance = AVSpeechUtterance(string: announcement)
-            utterance.rate = 0.5
-            // zero pre-utterance delay so it fires immediately
-            utterance.preUtteranceDelay = 0
-            self.synthesizer.speak(utterance)
+            let utt = AVSpeechUtterance(string: announcement)
+            // cast back to Float for the utterance rate
+            utt.rate = Float(self.speechRate)
+            utt.preUtteranceDelay = 0
+            self.synthesizer.speak(utt)
         }
         pendingWorkItem = work
-        
-        // Schedule it on the main queue after 0.3 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 }
+
 
 
 struct ARViewContainer: UIViewRepresentable {

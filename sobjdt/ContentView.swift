@@ -2,49 +2,42 @@
 
 import SwiftUI
 import Vision
+import AVFoundation    // ← brings in the AVSpeechUtterance rate constants
 
 struct ContentView: View {
     @ObservedObject private var overlay = DistanceOverlay.shared
+    
+    // MUST be Double here, not Float
+    @AppStorage("speechRate")
+    private var speechRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
 
     var body: some View {
         ZStack {
+            // 1) Your AR view
             ARViewContainer()
                 .edgesIgnoringSafeArea(.all)
 
-            // Draw the red box
-            GeometryReader { geo in
-                if let bbox = overlay.latestBBox {
-                    let w = bbox.width * geo.size.width
-                    let h = bbox.height * geo.size.height
-                    let x = bbox.midX * geo.size.width
-                    let y = (1 - bbox.midY) * geo.size.height
+            // 2) (Optionally) your red-box + name/distance overlays here…
 
-                    Rectangle()
-                        .stroke(Color.red, lineWidth: 3)
-                        .frame(width: w, height: h)
-                        .position(x: x, y: y)
-                }
-            }
+            // 3) Speech-rate slider at the bottom
+            VStack(spacing: 8) {
+                // First, compute the formatted string so we avoid any weird quoting
+                let rateString = String(format: "%.2f", speechRate)
 
-            // Name + distance label
-            VStack(spacing: 4) {
-                if !overlay.objectName.isEmpty {
-                    Text(overlay.objectName)
-                        .font(.title2).bold()
-                        .padding(.horizontal, 8)
-                        .background(Color.black.opacity(0.7))
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-
-                Text(overlay.distanceString)
-                    .font(.headline)
-                    .padding(8)
-                    .background(Color.black.opacity(0.6))
+                // Then interpolate it with a simple Text call
+                Text("Speech Speed: \(rateString)")
                     .foregroundColor(.white)
-                    .cornerRadius(8)
+                    .bold()
+
+                Slider(
+                  value: $speechRate,
+                  in: Double(AVSpeechUtteranceMinimumSpeechRate)...Double(AVSpeechUtteranceMaximumSpeechRate)
+                ) {
+                  Text("Speech Speed")
+                }
+
+                .padding(.horizontal)
             }
-            .padding(.top, 32)
         }
     }
 }
